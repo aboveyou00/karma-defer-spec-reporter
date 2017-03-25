@@ -1,9 +1,15 @@
 require('colors');
+let merge = require('lodash.merge');
 
-var SpecReporter = function (baseReporterDecorator, formatError, config) {
+var DeferSpecReporter = function (baseReporterDecorator, formatError, config) {
   baseReporterDecorator(this);
 
-  var reporterCfg = config.specReporter || {};
+  var reporterCfg = merge({
+    suppressPassed: true,
+    suppressFailed: false,
+    suppressSkipped: true,
+    deferred: true
+  }, config.deferSpecReporter || {});
   this.prefixes = reporterCfg.prefixes || {
       success: '✓ ',
       failure: '✗ ',
@@ -16,7 +22,7 @@ var SpecReporter = function (baseReporterDecorator, formatError, config) {
     this.prefixes.skipped = '- ';
   }
 
-  this.failures = [];
+  this.deferredOutput = [];
   this.USE_COLORS = false;
 
   // colorize output of BaseReporter functions
@@ -43,45 +49,22 @@ var SpecReporter = function (baseReporterDecorator, formatError, config) {
         this.write(this.TOTAL_SUCCESS, results.success);
       } else {
         this.write(this.TOTAL_FAILED, results.failed, results.success);
-        if (!this.suppressErrorSummary) {
-          this.logFinalErrors(this.failures);
-        }
+        this.logOutput();
       }
     }
 
     this.write('\n');
-    this.failures = [];
     this.currentSuite = [];
   };
 
-  this.logFinalErrors = function (errors) {
-    this.writeCommonMsg('\n\n');
-    this.WHITESPACE = '     ';
-
-    errors.forEach(function (failure, index) {
-      index = index + 1;
-
-      if (index > 1) {
-        this.writeCommonMsg('\n');
-      }
-
-      this.writeCommonMsg((index + ') ' + failure.description + '\n').red);
-      this.writeCommonMsg((this.WHITESPACE + failure.suite.join(' ') + '\n').red);
-      failure.log.forEach(function (log) {
-        if (reporterCfg.maxLogLines) {
-          log = log.split('\n').slice(0, reporterCfg.maxLogLines).join('\n');
-        }
-        this.writeCommonMsg(this.WHITESPACE + formatError(log)
-            .replace(/\\n/g, '\n').grey);
-      }, this);
-    }, this);
-
-    this.writeCommonMsg('\n');
+  this.logOutput = function() {
+    this.deferredOutput.map(deferred => deferred());
+    this.deferredOutput = [];
   };
 
   this.currentSuite = [];
   this.writeSpecMessage = function (status) {
-    return (function (browser, result) {
+    let toDefer = (function (browser, result) {
       var suite = result.suite;
       var indent = "  ";
       suite.forEach(function (value, index) {
@@ -122,6 +105,11 @@ var SpecReporter = function (baseReporterDecorator, formatError, config) {
       // browser.id;
       // browser.fullName;
     }).bind(this);
+
+    return (function(browser, result) {
+      if (reporterCfg.deferred) this.deferredOutput.push(() => toDefer(browser, result));
+      else toDefer(browser, result);
+    }).bind(this);
   };
 
   this.LOG_SINGLE_BROWSER = '%s LOG: %s\n';
@@ -138,23 +126,14 @@ var SpecReporter = function (baseReporterDecorator, formatError, config) {
   function noop() {
   }
 
-  this.onSpecFailure = function (browsers, results) {
-    this.failures.push(results);
-    this.writeSpecMessage(this.USE_COLORS ? this.prefixes.failure.red : this.prefixes.failure).apply(this, arguments);
-    if (reporterCfg.failFast) {
-      throw new Error('Fail fast active for tests, exiting(failFast option is enabled)');
-    }
-  };
-
   this.specSuccess = reporterCfg.suppressPassed ? noop : this.writeSpecMessage(this.USE_COLORS ? this.prefixes.success.green : this.prefixes.success);
-  this.specSkipped = reporterCfg.suppressSkipped ? noop : this.writeSpecMessage(this.USE_COLORS ? this.prefixes.skipped.cyan : this.prefixes.skipped);
-  this.specFailure = reporterCfg.suppressFailed ? noop : this.onSpecFailure;
-  this.suppressErrorSummary = reporterCfg.suppressErrorSummary || false;
+  this.specSkipped = reporterCfg.suppressSkipped ? noop : this.writeSpecMessage(this.USE_COLORS ? this.prefixes.skipped.yellow : this.prefixes.skipped);
+  this.specFailure = reporterCfg.suppressFailed ? noop : this.writeSpecMessage(this.USE_COLORS ? this.prefixes.failure.red : this.prefixes.failure);
   this.showSpecTiming = reporterCfg.showSpecTiming || false;
 };
 
-SpecReporter.$inject = ['baseReporterDecorator', 'formatError', 'config'];
+DeferSpecReporter.$inject = ['baseReporterDecorator', 'formatError', 'config'];
 
 module.exports = {
-  'reporter:spec': ['type', SpecReporter]
+  'reporter:defer-spec': ['type', DeferSpecReporter]
 };
